@@ -1,6 +1,6 @@
 {
   "datasetCommonParams": {
-    "dataset_root_dir": "/home/sharing/disk3/Datasets/MMSA-Standard",
+    "dataset_root_dir": "/home/lexu/MMSA/dataset",
     "mosi": {
       "aligned": {
         "featurePath": "MOSI/Processed/aligned_50.pkl",

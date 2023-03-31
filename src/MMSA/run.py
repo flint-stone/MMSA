@@ -254,7 +254,7 @@ def _run(args, num_workers=4, is_tune=False, from_sena=False):
     trainer = ATIO().getTrain(args)
     # do train
     # epoch_results = trainer.do_train(model, dataloader)
-    epoch_results = trainer.do_train(model, dataloader, return_epoch_results=from_sena)
+    # epoch_results = trainer.do_train(model, dataloader, return_epoch_results=from_sena)
     # load trained model & do test
     assert Path(args['model_save_path']).exists()
     model.load_state_dict(torch.load(args['model_save_path']))
