@@ -2,8 +2,15 @@ from MMSA import MMSA_run, MMSA_test, get_config_regression
 
 
 # run LMF on MOSI with default hyper parameters
-config = get_config_regression('lmf', 'mosi')
-MMSA_run('lmf', 'mosi',
+# config = get_config_regression('lmf', 'mosi')
+# MMSA_run('lmf', 'mosi',
+#          config=config, 
+#          seeds=[1111, 1112, 1113], gpu_ids=[0])
+
+# MMSA_run('self_mm', 'mosei', seeds=[1111], gpu_ids=[1])
+# MMSA_run('self_mm', 'mosei', seeds=[1111, 1112, 1113], gpu_ids=[1])
+config = get_config_regression('self_mm', 'mosei')
+MMSA_run('self_mm', 'mosei',
          config=config, 
          seeds=[1111, 1112, 1113], gpu_ids=[0])
 

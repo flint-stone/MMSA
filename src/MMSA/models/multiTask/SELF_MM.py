@@ -7,6 +7,7 @@ Paper: Learning Modality-Specific Representations with Self-Supervised Multi-Tas
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import time
 from torch.nn.utils.rnn import pack_padded_sequence
 
 from ..subNets import BertTextEncoder
@@ -57,15 +58,30 @@ class SELF_MM(nn.Module):
 
         mask_len = torch.sum(text[:,1,:], dim=1, keepdim=True)
         text_lengths = mask_len.squeeze(1).int().detach().cpu()
-        text = self.text_model(text)[:,0,:]
-
+        print(f"handling time audio {audio.size()} {audio_lengths} video {video.size()} {video_lengths} text {text.size()} {text_lengths}")
+        start = time.time()
+        if text is None:
+            pass
+        else:
+            text = self.text_model(text)[:,0,:]
         if self.aligned:
             audio = self.audio_model(audio, text_lengths)
+            # audio = torch.zeros([text.data.shape[0], text_lengths], dtype=torch.float32, device=text.device)
             video = self.video_model(video, text_lengths)
+            # video = torch.zeros([text.data.shape[0], 32], dtype=torch.float32, device=text.device)
         else:
-            audio = self.audio_model(audio, audio_lengths)
-            video = self.video_model(video, video_lengths)
-        
+            if audio is None:
+                audio = torch.zeros([text.data.shape[0], 16], dtype=torch.float32, device=text.device)
+            else:
+                audio = self.audio_model(audio, audio_lengths)
+            if video is None:
+                video = torch.zeros([text.data.shape[0], 32], dtype=torch.float32, device=text.device)
+            else:
+                video = self.video_model(video, video_lengths)
+
+        # text = torch.zeros([video.data.shape[0], 768], dtype=torch.float32, device=text.device)
+        print(f"handling time {time.time() - start} audio {audio.size()} video {video.size()} text {text.size()} {text.dtype} text_lengths {len(text_lengths.data)} audio_lengths {len(audio_lengths.data)} video_lengths {len(video_lengths.data)}")
+        #handling time 0.023541688919067383 torch.Size([16, 16]) torch.Size([16, 32]) torch.Size([16, 768]) torch.float32
         # fusion
         fusion_h = torch.cat([text, audio, video], dim=-1)
         fusion_h = self.post_fusion_dropout(fusion_h)
