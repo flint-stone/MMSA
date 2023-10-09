@@ -11,6 +11,9 @@ from ...utils import MetricsTop, dict_to_str
 
 logger = logging.getLogger('MMSA')
 
+timer_start = torch.cuda.Event(enable_timing=True)
+timer_end = torch.cuda.Event(enable_timing=True)
+
 class SELF_MM():
     def __init__(self, args):
         assert args.train_mode == 'regression'
@@ -208,8 +211,9 @@ class SELF_MM():
                         plk.dump(saved_labels, df, protocol=4)
                 return epoch_results if return_epoch_results else None
 
-    def do_test(self, model, dataloader, mode="VAL", return_sample_results=False):
+    def do_test(self, model, dataloader, mode="VAL", return_sample_results=False, modality_skip = [], precision = 'tf32'):
         model.eval()
+        print(f"Model {model}")
         y_pred = {'M': [], 'T': [], 'A': [], 'V': []}
         y_true = {'M': [], 'T': [], 'A': [], 'V': []}
         eval_loss = 0.0
@@ -222,22 +226,71 @@ class SELF_MM():
                 "Feature_v": [],
                 "Feature_f": [],
             }
+        print(f"SELF_MM do_test with {mode} mode")
         # criterion = nn.L1Loss()
+        times_infer=[]
+        mem_peaks = []
+        if 'vision' in modality_skip:
+            model.Model.video_model.to("cpu")
+        if 'audio' in modality_skip: 
+            model.Model.audio_model.to("cpu")
+        if 'text' in modality_skip:
+            model.Model.text_model.to("cpu")
+        if precision == "fp16":
+            model = model.half()
+        
+        for fqn, module in model.named_modules(): 
+            if isinstance(module, torch.nn.Linear) and "layer" in fqn:  
+                print(module.weight)
         with torch.no_grad():
             with tqdm(dataloader) as td:
-                for batch_data in td:
-                    vision = batch_data['vision'].to(self.args.device)
-                    audio = batch_data['audio'].to(self.args.device)
-                    text = batch_data['text'].to(self.args.device)
+                for i, batch_data in enumerate(td):
+                    vision = None
+                    audio = None
+                    text = None
+                    
+                    print(f"... Run with precision {precision}")
+                    if precision == "fp16":
+                        #model = model.half()
+                        batch_data['vision'] = batch_data['vision'].half()
+                        batch_data['audio'] = batch_data['audio'].half()
+                        batch_data['text'] = batch_data['text'].half()
+                        batch_data['audio_lengths'] = batch_data['audio_lengths'].half()
+                        batch_data['vision_lengths'] = batch_data['vision_lengths'].half()
+                        batch_data['labels']['M'] = batch_data['labels']['M'].half()
+                    torch.cuda.reset_max_memory_allocated()  
+                    timer_start.record()
+                      
+                    if 'vision' in modality_skip:
+                        batch_data['vision'] = None
+                    else:
+                        vision = batch_data['vision'].to(self.args.device)
+                        
+                    if 'audio' in modality_skip:   
+                        batch_data['audio'] = None 
+                    else:
+                        audio = batch_data['audio'].to(self.args.device)
+                        
+                    if 'text' in modality_skip:   
+                        batch_data['text'] = None 
+                    else:
+                        text = batch_data['text'].to(self.args.device)
+                    #print(f"skip modality {modality_skip}")
+                    
                     if not self.args.need_data_aligned:
                         audio_lengths = batch_data['audio_lengths']
                         vision_lengths = batch_data['vision_lengths']
                     else:
                         audio_lengths, vision_lengths = 0, 0
-
                     labels_m = batch_data['labels']['M'].to(self.args.device).view(-1)
-                    outputs = model(text, (audio, audio_lengths), (vision, vision_lengths))
-
+                    #print(f"{text.shape if text is not None else 'none'} {audio.shape if audio is not None else 'none'} {audio_lengths} {vision.shape if vision is not None else 'none'} {vision_lengths}")
+                    outputs = model(text, (audio, audio_lengths), (vision, vision_lengths), precision)
+                    timer_end.record()
+                    torch.cuda.synchronize(device=self.args.device)
+                    lat = timer_start.elapsed_time(timer_end)
+                    if i >  10:
+                        times_infer.append(lat)
+                        mem_peaks.append(torch.cuda.memory_stats(device=self.args.device)["allocated_bytes.all.peak"])
                     if return_sample_results:
                         ids.extend(batch_data['id'])
                         for item in features.keys():
@@ -257,6 +310,7 @@ class SELF_MM():
         eval_results = self.metrics(pred, true)
         logger.info('M: >> ' + dict_to_str(eval_results))
         eval_results['Loss'] = round(eval_loss, 4)
+        print(f"time average {np.mean(times_infer)} std {np.std(times_infer)} mem average {np.mean(mem_peaks)} B std {np.std(mem_peaks)} B")
 
         if return_sample_results:
             eval_results["Ids"] = ids

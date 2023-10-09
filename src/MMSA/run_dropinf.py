@@ -57,7 +57,7 @@ def _set_logger(log_dir, model_name, dataset_name, verbose_level):
     return logger
 
 
-def MMSA_run(
+def MMSA_run_dropinf(
     model_name: str, dataset_name: str, config_file: str = None,
     config: dict = None, seeds: list = [], is_tune: bool = False,
     tune_times: int = 50, custom_feature: str = None, feature_T: str = None, 
@@ -66,8 +66,7 @@ def MMSA_run(
     model_save_dir: str = Path().home() / "MMSA" / "saved_models",
     res_save_dir: str = Path().home() / "MMSA" / "results",
     log_dir: str = Path().home() / "MMSA" / "logs",
-    modality_skips_str: str = "", 
-    precision: str = "tf32",
+    modality_skips_str: str = ""
 ):
     """Train and Test MSA models.
 
@@ -104,9 +103,6 @@ def MMSA_run(
         res_save_dir: Path to save csv results. Default: "~/MMSA/results"
         log_dir: Path to save log files. Default: "~/MMSA/logs"
     """
-    if precision == "fp32":
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False 
     # Initialization
     model_name = model_name.lower()
     dataset_name = dataset_name.lower()
@@ -131,123 +127,66 @@ def MMSA_run(
     Path(log_dir).mkdir(parents=True, exist_ok=True)
     seeds = seeds if seeds != [] else [1111, 1112, 1113, 1114, 1115]
     logger = _set_logger(log_dir, model_name, dataset_name, verbose_level)
-    
+
     logger.info("======================================== Program Start ========================================")
     
-    if is_tune: # run tune
-        logger.info(f"Tuning with seed {seeds[0]}")
-        initial_args = get_config_tune(model_name, dataset_name, config_file)
-        initial_args['model_save_path'] = Path(model_save_dir) / f"{initial_args['model_name']}-{initial_args['dataset_name']}.pth"
-        initial_args['device'] = assign_gpu(gpu_ids)
-        initial_args['train_mode'] = 'regression' # backward compatibility. TODO: remove all train_mode in code
-        initial_args['custom_feature'] = custom_feature
-        initial_args['feature_T'] = feature_T
-        initial_args['feature_A'] = feature_A
-        initial_args['feature_V'] = feature_V
 
-        # torch.cuda.set_device() encouraged by pytorch developer, although dicouraged in the doc.
-        # https://github.com/pytorch/pytorch/issues/70404#issuecomment-1001113109
-        # It solves the bug of RNN always running on gpu 0.
-        torch.cuda.set_device(initial_args['device'])
+    args = get_config_regression(model_name, dataset_name, config_file)
+    args['model_save_path'] = Path(model_save_dir) / f"{args['model_name']}-{args['dataset_name']}.pth"
+    args['device'] = assign_gpu(gpu_ids)
+    args['train_mode'] = 'regression' # backward compatibility. TODO: remove all train_mode in code
+    args['custom_feature'] = custom_feature
+    args['feature_T'] = feature_T
+    args['feature_A'] = feature_A
+    args['feature_V'] = feature_V
+    if config: # override some arguments
+        if config.get('model_name'):
+            assert(config['model_name'] == args['model_name'])
+        args.update(config)
 
-        res_save_dir = Path(res_save_dir) / "tune"
-        res_save_dir.mkdir(parents=True, exist_ok=True)
-        has_debuged = [] # save used params
-        csv_file = res_save_dir / f"{dataset_name}-{model_name}.csv"
-        if csv_file.is_file():
-            df = pd.read_csv(csv_file)
-            for i in range(len(df)):
-                has_debuged.append([df.loc[i,k] for k in initial_args['d_paras']])
+    # torch.cuda.set_device() encouraged by pytorch developer, although dicouraged in the doc.
+    # https://github.com/pytorch/pytorch/issues/70404#issuecomment-1001113109
+    # It solves the bug of RNN always running on gpu 0.
+    torch.cuda.set_device(args['device'])
 
-        for i in range(tune_times):
-            args = edict(**initial_args)
-            random.seed(time.time())
-            new_args = get_config_tune(model_name, dataset_name, config_file)
-            args.update(new_args)
-            if config:
-                if config.get('model_name'):
-                    assert(config['model_name'] == args['model_name'])
-                args.update(config)
-            args['cur_seed'] = i + 1
-            logger.info(f"{'-'*30} Tuning [{i + 1}/{tune_times}] {'-'*30}")
-            logger.info(f"Args: {args}")
-            # check if this param has been run
-            cur_param = [args[k] for k in args['d_paras']]
-            if cur_param in has_debuged:
-                logger.info(f"This set of parameters has been run. Skip.")
-                time.sleep(1)
-                continue
-            # actual running
-            setup_seed(seeds[0])
-            result = _run(args, num_workers, is_tune, modality_skips_str=modality_skips_str, precision=precision)
-            has_debuged.append(cur_param)
-            # save result to csv file
-            if Path(csv_file).is_file():
-                df2 = pd.read_csv(csv_file)
-            else:
-                df2 = pd.DataFrame(columns = [k for k in args.d_paras] + [k for k in result.keys()])
-            res = [args[c] for c in args.d_paras]
-            for col in result.keys():
-                value = result[col]
-                res.append(value)
-            df2.loc[len(df2)] = res
-            df2.to_csv(csv_file, index=None)
-            logger.info(f"Results saved to {csv_file}.")
-    else: # run normal
-        args = get_config_regression(model_name, dataset_name, config_file)
-        args['model_save_path'] = Path(model_save_dir) / f"{args['model_name']}-{args['dataset_name']}.pth"
-        args['device'] = assign_gpu(gpu_ids)
-        args['train_mode'] = 'regression' # backward compatibility. TODO: remove all train_mode in code
-        args['custom_feature'] = custom_feature
-        args['feature_T'] = feature_T
-        args['feature_A'] = feature_A
-        args['feature_V'] = feature_V
-        if config: # override some arguments
-            if config.get('model_name'):
-                assert(config['model_name'] == args['model_name'])
-            args.update(config)
-
-        # torch.cuda.set_device() encouraged by pytorch developer, although dicouraged in the doc.
-        # https://github.com/pytorch/pytorch/issues/70404#issuecomment-1001113109
-        # It solves the bug of RNN always running on gpu 0.
-        torch.cuda.set_device(args['device'])
-
-        logger.info("Running with args:")
-        logger.info(args)
-        logger.info(f"Seeds: {seeds}")
-        res_save_dir = Path(res_save_dir) / "normal"
-        res_save_dir.mkdir(parents=True, exist_ok=True)
-        model_results = []
-        for i, seed in enumerate(seeds):
-            setup_seed(seed)
-            args['cur_seed'] = i + 1
-            logger.info(f"{'-'*30} Running with seed {seed} [{i + 1}/{len(seeds)}] {'-'*30}")
-            # actual running
-            result = _run(args, num_workers, is_tune, modality_skips_str=modality_skips_str, precision=precision)
-            logger.info(f"Result for seed {seed}: {result}")
-            print(f"Result for seed {seed}: {result}")
-            model_results.append(result)
-        criterions = list(model_results[0].keys())
-        # save result to csv
-        csv_file = res_save_dir / f"{dataset_name}.csv"
-        if csv_file.is_file():
-            df = pd.read_csv(csv_file)
-        else:
-            df = pd.DataFrame(columns=["Model"] + criterions)
-        # save results
-        res = [model_name]
-        print(f"criterions {criterions}")
-        for c in criterions:
-            values = [r[c] for r in model_results]
-            mean = round(np.mean(values)*100, 2)
-            std = round(np.std(values)*100, 2)
-            res.append((mean, std))
-        df.loc[len(df)] = res
-        df.to_csv(csv_file, index=None)
-        logger.info(f"Results saved to {csv_file}.")
+    logger.info("Running with args:")
+    logger.info(args)
+    logger.info(f"Seeds: {seeds}")
+    res_save_dir = Path(res_save_dir) / "normal"
+    res_save_dir.mkdir(parents=True, exist_ok=True)
+    model_results = []
+    i = 0
+    seed = seeds[0]
+    setup_seed(seed)
+    args['cur_seed'] = i + 1
+    logger.info(f"{'-'*30} Running with seed {seed} [{i + 1}/{len(seeds)}] {'-'*30}")
+    # actual running
+    return _run(args, num_workers, is_tune, modality_skips_str=modality_skips_str)
+    # logger.info(f"Result for seed {seed}: {result}")
+    # print(f"Result for seed {seed}: {result}")
+    # model_results.append(result)
+    
+    # criterions = list(model_results[0].keys())
+    # # save result to csv
+    # csv_file = res_save_dir / f"{dataset_name}.csv"
+    # if csv_file.is_file():
+    #     df = pd.read_csv(csv_file)
+    # else:
+    #     df = pd.DataFrame(columns=["Model"] + criterions)
+    # # save results
+    # res = [model_name]
+    # print(f"criterions {criterions}")
+    # for c in criterions:
+    #     values = [r[c] for r in model_results]
+    #     mean = round(np.mean(values)*100, 2)
+    #     std = round(np.std(values)*100, 2)
+    #     res.append((mean, std))
+    # df.loc[len(df)] = res
+    # df.to_csv(csv_file, index=None)
+    # logger.info(f"Results saved to {csv_file}.")
 
 
-def _run(args, num_workers=4, is_tune=False, from_sena=False, modality_skips_str="", precision="tf32"):
+def _run(args, num_workers=4, is_tune=False, from_sena=False, modality_skips_str=""):
     # load data and models
     dataloader = MMDataLoader(args, num_workers)
     model = AMIO(args).to(args['device'])
@@ -264,44 +203,24 @@ def _run(args, num_workers=4, is_tune=False, from_sena=False, modality_skips_str
     #epoch_results = trainer.do_train(model, dataloader, return_epoch_results=from_sena)
     # load trained model & do test
     assert Path(args['model_save_path']).exists()
-    if precision == "fp32":
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False 
     model.load_state_dict(torch.load(args['model_save_path']))
     model.to(args['device'])
-    if precision == "fp16":
-        model = model.half()
-    if from_sena:
-        print("Execute FROM_SENA mode")
-        final_results = {}
-        # final_results['train'] = trainer.do_test(model, dataloader['train'], mode="TRAIN", return_sample_results=True)
-        # final_results['valid'] = trainer.do_test(model, dataloader['valid'], mode="VALID", return_sample_results=True)
-        modality_skips = modality_skips_str.split(',')
-        print(f"Execute TEST mode {modality_skips_str} {modality_skips}")
-        if  modality_skips_str == "None":
-            modality_skips = []
-        final_results['test'] = trainer.do_test(model, dataloader['test'], mode="TEST", return_sample_results=True, modality_skip=modality_skips, precision=precision)
-    elif is_tune:
-        print("Execute TUNE mode")
-        # use valid set to tune hyper parameters
-        # results = trainer.do_test(model, dataloader['valid'], mode="VALID")
-        results = trainer.do_test(model, dataloader['test'], mode="TEST")
-        # delete saved model
-        Path(args['model_save_path']).unlink(missing_ok=True)
-    else:
-        modality_skips = modality_skips_str.split(',')
-        print(f"Execute TEST mode {modality_skips_str} {modality_skips}")
-        if  modality_skips_str == "None":
-            modality_skips = []
-        results = trainer.do_test(model, dataloader['test'], mode="TEST", modality_skip=modality_skips, precision=precision)
+    modality_skips = modality_skips_str.split(',')
+    print(f"Execute TEST mode {modality_skips_str} {modality_skips}")
+    if  modality_skips_str == "None":
+        modality_skips = []
+    print(f"model {model} trainer {trainer} dataloader {dataloader['test']}")
+    return model, dataloader['test']
+    #return model, dataloader['test'], tra
+    # results = trainer.do_test(model, dataloader['test'], mode="TEST", modality_skip=modality_skips)
 
-    del model
-    torch.cuda.empty_cache()
-    gc.collect()
-    time.sleep(1)
+    # del model
+    # torch.cuda.empty_cache()
+    # gc.collect()
+    # time.sleep(1)
 
-    #return {"epoch_results": epoch_results, 'final_results': final_results} if from_sena else results
-    return {"epoch_results": "", 'final_results': final_results} if from_sena else results
+    # #return {"epoch_results": epoch_results, 'final_results': final_results} if from_sena else results
+    # return {"epoch_results": "", 'final_results': final_results} if from_sena else results
 
 
 def MMSA_test(

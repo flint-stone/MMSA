@@ -6,12 +6,14 @@ __all__ = ['MetricsTop']
 class MetricsTop():
     def __init__(self, train_mode):
         if train_mode == "regression":
+            print(f"Choose regression metrics")
             self.metrics_dict = {
                 'MOSI': self.__eval_mosi_regression,
                 'MOSEI': self.__eval_mosei_regression,
                 'SIMS': self.__eval_sims_regression
             }
         else:
+            print(f"Choose classification metrics")
             self.metrics_dict = {
                 'MOSI': self.__eval_mosi_classification,
                 'MOSEI': self.__eval_mosei_classification,
